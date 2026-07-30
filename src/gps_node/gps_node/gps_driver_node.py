@@ -108,7 +108,7 @@ class GpsDriverNode(Node):
             self._serial = serial.Serial(self.serial_port, self.baud_rate, timeout=1.0)
             self.get_logger().info('Serial port connected')
         except (serial.SerialException, FileNotFoundError) as exc:
-            self.get_logger().warn(f'Unable to open serial port {self.serial_port}: {exc}')
+            self.get_logger().warning(f'Unable to open serial port {self.serial_port}: {exc}')
             self._serial = None
 
     def _open_log_files(self):
@@ -165,7 +165,7 @@ class GpsDriverNode(Node):
         try:
             line = self._serial.readline().decode('ascii', errors='ignore').strip()
         except serial.SerialException as exc:
-            self.get_logger().warn(f'Serial read failed: {exc}')
+            self.get_logger().warning(f'Serial read failed: {exc}')
             return 0.0, 0.0, 0.0, 0.0, False
 
         if not line:
