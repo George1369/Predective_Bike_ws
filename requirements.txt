@@ -1,0 +1,2 @@
+# Python dependencies for the Bicycle ADAS ROS 2 workspace
+pyserial
