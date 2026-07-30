@@ -32,3 +32,7 @@ Thumbs.db
 startup_logs/
 *.tmp
 *.swp
+ignore
+*:Zone.Identifier
+ignore
+*:Zone.Identifier
