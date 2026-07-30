@@ -50,7 +50,9 @@ def parse_nmea_sentence(sentence):
         return 0.0, 0.0, 0.0, 0.0, False
 
     talker = parts[0][:2]
-    if talker == 'GP' and parts[0].endswith('RMC'):
+    valid_talkers = {'GP', 'GN', 'GL', 'BD', 'GA'}
+
+    if talker in valid_talkers and parts[0].endswith('RMC'):
         if len(parts) < 12:
             return 0.0, 0.0, 0.0, 0.0, False
         status = parts[2]
@@ -62,7 +64,7 @@ def parse_nmea_sentence(sentence):
         speed_mps = speed_knots * 0.5144444444
         return lat, lon, 0.0, speed_mps, True
 
-    if talker == 'GP' and parts[0].endswith('GGA'):
+    if talker in valid_talkers and parts[0].endswith('GGA'):
         if len(parts) < 9:
             return 0.0, 0.0, 0.0, 0.0, False
         fix_quality = int(parts[6]) if parts[6] else 0
