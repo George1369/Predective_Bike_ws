@@ -18,7 +18,6 @@ setup(
     maintainer_email='you@example.com',
     description='Synthetic sensor publishers for PC-side development before hardware is wired up',
     license='Apache-2.0',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'mock_imu_publisher = mock_sensors.mock_imu_publisher:main',

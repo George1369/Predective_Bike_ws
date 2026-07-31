@@ -36,9 +36,12 @@ if ! "${VENV_PYTHON}" -m pip --version >/dev/null 2>&1; then
     exit 1
 fi
 
-"${VENV_PYTHON}" -m pip install --upgrade pip setuptools wheel
+VENV_SITE_PACKAGES="$("${VENV_PYTHON}" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+# ROS entry points use the system interpreter, so expose packages installed in
+# this workspace venv to the interpreter that runs the generated ROS scripts.
+export PYTHONPATH="${VENV_SITE_PACKAGES}${PYTHONPATH:+:${PYTHONPATH}}"
 
-if ! "${VENV_PYTHON}" -c "import serial" >/dev/null 2>&1; then
+if ! "${VENV_PYTHON}" -c "import serial, smbus2" >/dev/null 2>&1; then
     echo "Python dependencies missing; installing from requirements.txt"
     "${VENV_PYTHON}" -m pip install -r requirements.txt
 fi

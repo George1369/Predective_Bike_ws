@@ -17,7 +17,6 @@ setup(
     maintainer_email='you@example.com',
     description='GPS/GNSS driver node: position, speed, route logging support',
     license='Apache-2.0',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'gps_driver_node = gps_node.gps_driver_node:main',

@@ -2,13 +2,9 @@
 """Graphical dashboard for GPS and radar data on an HDMI display."""
 
 import math
-import os
-import tempfile
 import threading
 import tkinter as tk
 from tkinter import ttk
-import urllib.request
-from urllib.error import URLError, HTTPError
 
 import rclpy
 from rclpy.node import Node
@@ -54,6 +50,7 @@ class DashboardNode(Node):
         self.root.title('Bike ADAS Dashboard')
         self.root.configure(bg='#020617')
         self.root.attributes('-fullscreen', True)
+        self.root.bind('<Escape>', lambda _event: self.root.destroy())
 
         self._build_ui()
         self._spin_thread = threading.Thread(target=self._spin_ros, daemon=True)
@@ -103,7 +100,7 @@ class DashboardNode(Node):
         tk.Label(map_frame, textvariable=self.map_var, bg='#111827', fg='#f8fafc', font=('Helvetica', 16), padx=12, pady=6).pack(anchor='w')
         self.icon_var = tk.StringVar(value='⚪ Safe')
         tk.Label(map_frame, textvariable=self.icon_var, bg='#111827', fg='#4ade80', font=('Helvetica', 18, 'bold'), padx=12, pady=6).pack(anchor='w')
-        self.map_canvas = tk.Canvas(map_frame, width=520, height=220, bg='#0f172a', highlightthickness=0)
+        self.map_canvas = tk.Canvas(map_frame, width=640, height=250, bg='#0f172a', highlightthickness=0)
         self.map_canvas.pack(fill='x', padx=12, pady=(0, 12))
 
         radar_frame = tk.Frame(content, bg='#111827', bd=2, relief='groove')
@@ -134,45 +131,26 @@ class DashboardNode(Node):
         self._radar_motion = msg.motion
         self._radar_confidence = msg.confidence
 
-    def _draw_map_placeholder(self):
-        self.map_canvas.delete('all')
-        self.map_canvas.create_rectangle(0, 0, 520, 220, fill='#1e293b', outline='#38bdf8')
-        self.map_canvas.create_text(260, 95, text='OpenStreetMap tile\nloading...', fill='#f8fafc', font=('Helvetica', 14, 'bold'))
-
     def _draw_map_overlay(self):
+        """Draw locally so the dashboard remains responsive without internet."""
         self.map_canvas.delete('all')
-        self.map_canvas.create_rectangle(0, 0, 520, 220, fill='#0f172a', outline='#334155')
-
-        try:
-            tile_url = build_osm_tile_url(self._gps_lat, self._gps_lon, zoom=15)
-            with urllib.request.urlopen(tile_url, timeout=2) as response:
-                tile_bytes = response.read()
-            if tile_bytes:
-                handle, tmp_path = tempfile.mkstemp(suffix='.png')
-                os.close(handle)
-                with open(tmp_path, 'wb') as fh:
-                    fh.write(tile_bytes)
-                try:
-                    self._map_photo = tk.PhotoImage(file=tmp_path)
-                    self.map_canvas.create_image(0, 0, anchor='nw', image=self._map_photo)
-                except tk.TclError:
-                    self._draw_map_placeholder()
-                finally:
-                    try:
-                        os.remove(tmp_path)
-                    except OSError:
-                        pass
-            else:
-                self._draw_map_placeholder()
-        except (URLError, HTTPError, OSError):
-            self._draw_map_placeholder()
-
-        self.map_canvas.create_oval(240, 95, 280, 135, fill='#38bdf8', outline='#f8fafc', width=2)
-        self.map_canvas.create_text(260, 148, text='bike', fill='#f8fafc', font=('Helvetica', 10, 'bold'))
+        width = max(self.map_canvas.winfo_width(), 1)
+        height = max(self.map_canvas.winfo_height(), 1)
+        self.map_canvas.create_rectangle(0, 0, width, height, fill='#0f172a', outline='#334155')
+        for offset in range(0, width, 80):
+            self.map_canvas.create_line(offset, 0, offset, height, fill='#172554')
+        for offset in range(0, height, 50):
+            self.map_canvas.create_line(0, offset, width, offset, fill='#172554')
+        center_x, center_y = width // 2, height * 2 // 3
+        self.map_canvas.create_oval(center_x - 18, center_y - 18, center_x + 18, center_y + 18,
+                                    fill='#38bdf8', outline='#f8fafc', width=2)
+        self.map_canvas.create_text(center_x, center_y + 32, text='BIKE', fill='#f8fafc', font=('Helvetica', 10, 'bold'))
+        self.map_canvas.create_text(12, 12, anchor='nw', fill='#cbd5e1', font=('Helvetica', 11),
+                                    text=f'{self._gps_lat:.5f}, {self._gps_lon:.5f}')
 
         if self._radar_presence:
-            self.map_canvas.create_rectangle(320, 40, 470, 140, outline='#f87171', width=3)
-            self.map_canvas.create_text(395, 90, text='warning zone', fill='#f87171', font=('Helvetica', 12, 'bold'))
+            self.map_canvas.create_rectangle(center_x - 60, 36, center_x + 60, 116, outline='#f87171', width=3)
+            self.map_canvas.create_text(center_x, 76, text=f'OBSTACLE\n{self._radar_distance:.2f} m', fill='#f87171', font=('Helvetica', 12, 'bold'))
 
     def _update_ui(self):
         self.lat_var.set(f'lat: {self._gps_lat:.4f}')
@@ -186,12 +164,12 @@ class DashboardNode(Node):
         if self._radar_presence:
             self.status_var.set('STATUS: WARNING')
             self.root.configure(bg='#7f1d1d')
-            self.icon_var.set('⚠️ Warning')
-            self.map_var.set(f'Route: obstacle ahead • {self._radar_distance:.2f} m')
+            self.icon_var.set('Warning')
+            self.map_var.set(f'Route: obstacle ahead | {self._radar_distance:.2f} m')
         else:
             self.status_var.set('STATUS: SAFE')
             self.root.configure(bg='#020617')
-            self.icon_var.set('⚪ Safe')
+            self.icon_var.set('Safe')
             self.map_var.set('Route: live tracking')
 
         self._draw_map_overlay()

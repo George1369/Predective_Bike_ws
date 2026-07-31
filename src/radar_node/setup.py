@@ -11,13 +11,12 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ],
-    install_requires=['setuptools', 'pyserial'],
+    install_requires=['setuptools', 'smbus2'],
     zip_safe=True,
     maintainer='your_name',
     maintainer_email='you@example.com',
     description='Radar driver node: range sensing for obstacle detection',
     license='Apache-2.0',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'radar_driver_node = radar_node.radar_driver_node:main',

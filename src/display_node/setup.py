@@ -17,7 +17,6 @@ setup(
     maintainer_email='you@example.com',
     description='Display node for showing GPS and radar status',
     license='Apache-2.0',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'screen_display_node = display_node.screen_display_node:main',

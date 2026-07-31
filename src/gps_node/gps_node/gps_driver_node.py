@@ -9,7 +9,7 @@ Publishes:
     /gps/speed   (std_msgs/Float32)       - speed over ground, m/s
 
 Hardware:
-    Serial port : /dev/ttyAMA0  (UART0, GPIO14/15, physical pins 8/10)
+    Serial port : /dev/serial0 (GPIO UART, physical pins 8/10)
     Baud rate   : 9600 (L76K default)
 
     Wiring:
@@ -18,8 +18,8 @@ Hardware:
         GPS TX   -> Pi pin 10 (GPIO15 / RXD0)
         GPS RX   -> Pi pin 8  (GPIO14 / TXD0)
 
-    NOTE: /dev/serial0 symlinks to ttyAMA10 on Pi 5, but the active
-    UART for GPIO14/15 is /dev/ttyAMA0 — always use ttyAMA0 explicitly.
+    Use /dev/serial0 rather than a ttyAMA*/ttyS* name. Raspberry Pi OS maps
+    that stable symlink to the UART currently assigned to GPIO14/15.
 """
 
 import csv
@@ -118,7 +118,7 @@ class GpsDriverNode(Node):
         super().__init__('gps_driver_node')
 
         # Parameters (override at runtime with --ros-args -p key:=value)
-        self.declare_parameter('serial_port', '/dev/ttyAMA0')
+        self.declare_parameter('serial_port', '/dev/serial0')
         self.declare_parameter('baud_rate', 9600)
         self.declare_parameter('log_directory',
                                str(Path.home() / 'bike_adas_logs'))

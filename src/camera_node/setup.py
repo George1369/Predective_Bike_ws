@@ -17,7 +17,6 @@ setup(
     maintainer_email='you@example.com',
     description='Placeholder package for camera_node -- fill in during its bring-up phase',
     license='Apache-2.0',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [],
     },

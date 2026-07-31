@@ -1,23 +1,23 @@
 # bike_ws -- Smart Bicycle ADAS ROS 2 Workspace
 
-Targets ROS 2 Lyrical Luth on Ubuntu 26.04 (Pi) and should be built with the
-same distro/Ubuntu combo on your PC to avoid version skew.
+Targets ROS 2 Jazzy on Raspberry Pi OS (64-bit) on a Raspberry Pi 5. The
+hardware deployment instructions are in [docs/RASPBERRY_PI_SETUP.md](docs/RASPBERRY_PI_SETUP.md).
 
 ## Packages
 
 | Package        | Status                | Purpose |
 |----------------|------------------------|---------|
 | `bike_msgs`    | Ready                  | Custom message types (Detection2D, RadarTarget, TrackedObject, RiskState) |
-| `imu_node`     | Stub hardware read     | Phase 1: real IMU driver (fill in `_read_hardware()`) |
+| `imu_node`     | Stub hardware read     | No IMU model has been selected yet; it must not be used for safety decisions |
 | `gps_node`     | Stub hardware read     | Phase 1: real GPS driver (fill in `_read_hardware()`) |
 | `camera_node`  | Placeholder only       | Phase 1c/2: bring up after IMU + GPS are validated |
-| `radar_node`   | Placeholder only       | Phase 1c/2: bring up last (most complex driver) |
+| `radar_node`   | A121 I2C distance mode | Waveshare A121 with `i2c_distance_detector` firmware |
 | `mock_sensors` | Ready                  | Synthetic IMU/GPS publishers for PC-only development |
 
 ## Build
 
 ```bash
-cd ~/bike_ws
+cd ~/Predective_Bike_ws
 colcon build --symlink-install
 source install/setup.bash
 ```
@@ -47,23 +47,22 @@ without needing the mock publishers (or the Pi) running at all:
 ros2 bag play mock_bag_01
 ```
 
-## Pi-side workflow (real hardware, one sensor at a time)
+## Pi-side workflow (real hardware)
 
-1. Fill in `_read_hardware()` in `imu_node/imu_node/imu_driver_node.py` for your
-   actual IMU part (I2C address, register map).
-2. Build and run just that node:
+1. Complete the one-time Pi configuration in [docs/RASPBERRY_PI_SETUP.md](docs/RASPBERRY_PI_SETUP.md), including the HDMI display mode, I2C, UART, and serial permissions.
+2. Build and launch the three connected components:
    ```bash
-   colcon build --packages-select imu_node bike_msgs --symlink-install
+   cd ~/Predective_Bike_ws
+   source ~/ros2_jazzy/install/setup.bash
+   colcon build --symlink-install
    source install/setup.bash
-   ros2 run imu_node imu_driver_node
+   ./run_bike_dashboard.sh
    ```
-3. In another terminal, confirm real data on `/imu/data` at the expected rate
-   and sanity-check values against known reference (e.g. resting = ~9.81 m/s^2 on Z).
-4. Record a short rosbag2 of real data, pull it to your PC, and compare its
-   shape/noise characteristics against the mock data -- adjust the mock
-   publisher's noise/motion model if it's unrealistic.
-5. Repeat steps 1-4 for `gps_node`, then move on to `camera_node`, then
-   `radar_node`, per the phased roadmap.
+3. In another terminal, verify the data:
+   ```bash
+   ros2 topic echo /gps/fix
+   ros2 topic echo /radar/state
+   ```
 
 ## Notes
 
@@ -72,3 +71,5 @@ ros2 bag play mock_bag_01
   (to be added next) can be developed against either source interchangeably.
 - `bike_msgs` has no hardware dependency and can be built/tested entirely on
   your PC from day one.
+- The IMU and camera packages remain intentionally unimplemented because no
+  corresponding hardware has been specified. They are not started by the dashboard launch file.

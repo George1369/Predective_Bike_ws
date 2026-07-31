@@ -17,7 +17,6 @@ setup(
     maintainer_email='you@example.com',
     description='IMU driver node: orientation, motion, fall/impact detection',
     license='Apache-2.0',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'imu_driver_node = imu_node.imu_driver_node:main',
