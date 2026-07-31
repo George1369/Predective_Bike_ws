@@ -50,7 +50,9 @@ fi
 
 if [ -f install/setup.bash ]; then
     # shellcheck disable=SC1091
+    set +u
     source install/setup.bash
+    set -u
 else
     echo "ERROR: install/setup.bash not found. Run colcon build first."
     exit 1
