@@ -4,6 +4,7 @@
 import math
 import os
 import tempfile
+import threading
 import tkinter as tk
 from tkinter import ttk
 import urllib.request
@@ -55,7 +56,12 @@ class DashboardNode(Node):
         self.root.attributes('-fullscreen', True)
 
         self._build_ui()
+        self._spin_thread = threading.Thread(target=self._spin_ros, daemon=True)
+        self._spin_thread.start()
         self._update_ui()
+
+    def _spin_ros(self):
+        rclpy.spin(self)
 
     def _build_ui(self):
         container = ttk.Frame(self.root, padding=24)
@@ -192,7 +198,11 @@ class DashboardNode(Node):
         self.root.after(250, self._update_ui)
 
     def start(self):
-        self.root.mainloop()
+        try:
+            self.root.mainloop()
+        finally:
+            if rclpy.ok():
+                rclpy.shutdown()
 
 
 def main(args=None):
