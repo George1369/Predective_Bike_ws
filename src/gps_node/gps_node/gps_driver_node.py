@@ -2,23 +2,28 @@
 """
 gps_driver_node.py
 
-Phase 1 driver node for a UART GPS/GNSS module (e.g. u-blox NEO-M9N).
+UART GPS/GNSS driver node for the Waveshare L76K module on Raspberry Pi 5.
 
 Publishes:
-    /gps/fix     (sensor_msgs/NavSatFix)
-    /gps/speed   (std_msgs/Float32)     - speed over ground, m/s
+    /gps/fix     (sensor_msgs/NavSatFix)  - position + fix status
+    /gps/speed   (std_msgs/Float32)       - speed over ground, m/s
 
-TODO (hardware bring-up):
-    - Replace `_read_hardware()` with real UART reads + NMEA/UBX parsing
-      (e.g. pyserial + pynmea2, or gpsd via ROS 2 gpsd_client).
-    - Confirm serial port name (commonly /dev/ttyAMA0 or /dev/ttyUSB0 on Pi)
-      and baud rate (commonly 9600 or 38400) against your specific module.
+Hardware:
+    Serial port : /dev/ttyAMA0  (UART0, GPIO14/15, physical pins 8/10)
+    Baud rate   : 9600 (L76K default)
+
+    Wiring:
+        GPS VCC  -> Pi pin 4  (5V)
+        GPS GND  -> Pi pin 6  (GND)
+        GPS TX   -> Pi pin 10 (GPIO15 / RXD0)
+        GPS RX   -> Pi pin 8  (GPIO14 / TXD0)
+
+    NOTE: /dev/serial0 symlinks to ttyAMA10 on Pi 5, but the active
+    UART for GPIO14/15 is /dev/ttyAMA0 — always use ttyAMA0 explicitly.
 """
 
 import csv
-import math
 import os
-import re
 from datetime import datetime
 from pathlib import Path
 
@@ -28,171 +33,252 @@ from rclpy.node import Node
 from sensor_msgs.msg import NavSatFix, NavSatStatus
 from std_msgs.msg import Float32
 
-PUBLISH_RATE_HZ = 1.0  # typical GPS fix rate
+PUBLISH_RATE_HZ = 1.0  # standard GPS fix rate
 
 
-def _dms_to_decimal(degrees, minutes, hemisphere):
-    value = float(degrees) + float(minutes) / 60.0
+# ---------------------------------------------------------------------------
+# NMEA helpers
+# ---------------------------------------------------------------------------
+
+def _dms_to_decimal(raw_deg_min: str, hemisphere: str) -> float:
+    """Convert NMEA degree-minutes string (DDDMM.mmmmm) to decimal degrees."""
+    if not raw_deg_min:
+        return 0.0
+    dot = raw_deg_min.index('.')
+    deg_chars = dot - 2          # always 2 digits of minutes before decimal
+    degrees = float(raw_deg_min[:deg_chars])
+    minutes = float(raw_deg_min[deg_chars:])
+    value = degrees + minutes / 60.0
     if hemisphere in {'S', 'W'}:
         value = -value
     return value
 
 
-def parse_nmea_sentence(sentence):
+def parse_nmea_sentence(sentence: str):
+    """
+    Parse a single NMEA sentence and return
+    (lat_deg, lon_deg, alt_m, speed_mps, has_fix).
+
+    Accepts any GNSS talker prefix (GP, GN, GL, GA, GB …) so that
+    multi-constellation receivers that emit $GNRMC / $GNGGA are handled
+    correctly — not just single-system $GPRMC / $GPGGA sentences.
+    """
     sentence = sentence.strip()
+    # strip leading '$' and optional checksum suffix (*XX)
     if sentence.startswith('$'):
         sentence = sentence[1:]
+    if '*' in sentence:
+        sentence = sentence[:sentence.index('*')]
     if not sentence:
         return 0.0, 0.0, 0.0, 0.0, False
 
     parts = sentence.split(',')
-    if not parts:
-        return 0.0, 0.0, 0.0, 0.0, False
+    msg_type = parts[0]  # e.g. 'GNRMC', 'GPRMC', 'GNGGA', 'GPGGA' …
 
-    talker = parts[0][:2]
-    valid_talkers = {'GP', 'GN', 'GL', 'BD', 'GA'}
-
-    if talker in valid_talkers and parts[0].endswith('RMC'):
-        if len(parts) < 12:
+    # ------------------------------------------------------------------
+    # RMC — Recommended Minimum Specific GNSS Data
+    # Fields: type,time,status,lat,NS,lon,EW,speed_kn,course,date,...
+    # ------------------------------------------------------------------
+    if msg_type.endswith('RMC'):
+        if len(parts) < 8:
             return 0.0, 0.0, 0.0, 0.0, False
-        status = parts[2]
+        status = parts[2]          # 'A' = valid, 'V' = void
         if status != 'A':
             return 0.0, 0.0, 0.0, 0.0, False
-        lat = _dms_to_decimal(parts[3][:2], parts[3][2:], parts[4])
-        lon = _dms_to_decimal(parts[5][:3], parts[5][3:], parts[6])
+        lat = _dms_to_decimal(parts[3], parts[4])
+        lon = _dms_to_decimal(parts[5], parts[6])
         speed_knots = float(parts[7]) if parts[7] else 0.0
         speed_mps = speed_knots * 0.5144444444
         return lat, lon, 0.0, speed_mps, True
 
-    if talker in valid_talkers and parts[0].endswith('GGA'):
-        if len(parts) < 9:
+    # ------------------------------------------------------------------
+    # GGA — Global Positioning System Fix Data
+    # Fields: type,time,lat,NS,lon,EW,quality,sats,hdop,alt,M,...
+    # ------------------------------------------------------------------
+    if msg_type.endswith('GGA'):
+        if len(parts) < 10:
             return 0.0, 0.0, 0.0, 0.0, False
         fix_quality = int(parts[6]) if parts[6] else 0
-        if fix_quality == 0:
+        if fix_quality == 0:       # 0 = no fix
             return 0.0, 0.0, 0.0, 0.0, False
-        lat = _dms_to_decimal(parts[2][:2], parts[2][2:], parts[3])
-        lon = _dms_to_decimal(parts[4][:3], parts[4][3:], parts[5])
+        lat = _dms_to_decimal(parts[2], parts[3])
+        lon = _dms_to_decimal(parts[4], parts[5])
         alt = float(parts[9]) if parts[9] else 0.0
         return lat, lon, alt, 0.0, True
 
     return 0.0, 0.0, 0.0, 0.0, False
 
 
+# ---------------------------------------------------------------------------
+# ROS 2 node
+# ---------------------------------------------------------------------------
+
 class GpsDriverNode(Node):
     def __init__(self):
         super().__init__('gps_driver_node')
 
+        # Parameters (override at runtime with --ros-args -p key:=value)
         self.declare_parameter('serial_port', '/dev/ttyAMA0')
         self.declare_parameter('baud_rate', 9600)
-        self.declare_parameter('log_directory', str(Path.home() / 'bike_adas_logs'))
+        self.declare_parameter('log_directory',
+                               str(Path.home() / 'bike_adas_logs'))
 
-        self.fix_pub = self.create_publisher(NavSatFix, '/gps/fix', 10)
-        self.speed_pub = self.create_publisher(Float32, '/gps/speed', 10)
+        self._serial_port = self.get_parameter('serial_port').value
+        self._baud_rate = self.get_parameter('baud_rate').value
+        self._log_dir = Path(
+            os.path.expanduser(
+                self.get_parameter('log_directory').value))
 
-        self.serial_port = self.get_parameter('serial_port').value
-        self.baud_rate = self.get_parameter('baud_rate').value
-        self.log_directory = Path(os.path.expanduser(self.get_parameter('log_directory').value))
+        # Publishers
+        self._fix_pub = self.create_publisher(NavSatFix, '/gps/fix', 10)
+        self._speed_pub = self.create_publisher(Float32, '/gps/speed', 10)
+
+        # State
         self._serial = None
-        self._last_sentence = None
+        self._last_sentence = ''
         self._gps_log_file = None
         self._gps_writer = None
         self._raw_nmea_log_file = None
+
         self._connect_serial()
         self._open_log_files()
 
-        self.timer = self.create_timer(1.0 / PUBLISH_RATE_HZ, self._on_timer)
-        self.get_logger().info(f'gps_driver_node started on {self.serial_port} at {self.baud_rate}')
+        self._timer = self.create_timer(1.0 / PUBLISH_RATE_HZ, self._on_timer)
+        self.get_logger().info(
+            f'gps_driver_node started — port={self._serial_port} '
+            f'baud={self._baud_rate}')
+
+    # ------------------------------------------------------------------
+    # Serial
+    # ------------------------------------------------------------------
 
     def _connect_serial(self):
         try:
-            self._serial = serial.Serial(self.serial_port, self.baud_rate, timeout=1.0)
-            self.get_logger().info('Serial port connected')
+            self._serial = serial.Serial(
+                self._serial_port,
+                self._baud_rate,
+                timeout=1.0,
+            )
+            self.get_logger().info(
+                f'Serial port {self._serial_port} connected')
         except (serial.SerialException, FileNotFoundError) as exc:
-            self.get_logger().warning(f'Unable to open serial port {self.serial_port}: {exc}')
+            self.get_logger().warn(
+                f'Unable to open serial port {self._serial_port}: {exc}')
             self._serial = None
 
+    # ------------------------------------------------------------------
+    # Logging
+    # ------------------------------------------------------------------
+
     def _open_log_files(self):
-        self.log_directory.mkdir(parents=True, exist_ok=True)
-        gps_log_path = self.log_directory / 'gps_fix_log.csv'
-        raw_nmea_path = self.log_directory / 'gps_nmea.log'
-        is_new = not gps_log_path.exists()
-        self._gps_log_file = open(gps_log_path, 'a', newline='', encoding='utf-8')
+        self._log_dir.mkdir(parents=True, exist_ok=True)
+
+        fix_path = self._log_dir / 'gps_fix_log.csv'
+        nmea_path = self._log_dir / 'gps_nmea.log'
+
+        is_new = not fix_path.exists()
+        self._gps_log_file = open(fix_path, 'a', newline='', encoding='utf-8')
         self._gps_writer = csv.writer(self._gps_log_file)
         if is_new:
             self._gps_writer.writerow([
-                'timestamp', 'fix_status', 'latitude', 'longitude',
-                'altitude_m', 'speed_mps', 'raw_nmea'
+                'timestamp', 'fix_status',
+                'latitude', 'longitude', 'altitude_m',
+                'speed_mps', 'raw_nmea',
             ])
             self._gps_log_file.flush()
-        self._raw_nmea_log_file = open(raw_nmea_path, 'a', encoding='utf-8')
 
-    def _log_raw_nmea(self, sentence):
+        self._raw_nmea_log_file = open(nmea_path, 'a', encoding='utf-8')
+
+    def _log_raw_nmea(self, sentence: str):
         if self._raw_nmea_log_file is None:
             return
-        timestamp = datetime.utcnow().isoformat() + 'Z'
-        self._raw_nmea_log_file.write(f'{timestamp},{sentence}\n')
+        ts = datetime.utcnow().isoformat() + 'Z'
+        self._raw_nmea_log_file.write(f'{ts},{sentence}\n')
         self._raw_nmea_log_file.flush()
 
-    def _log_fix_data(self, fix_status, lat, lon, alt, speed, raw_sentence):
+    def _log_fix(self, has_fix: bool, lat, lon, alt, speed, raw: str):
         if self._gps_writer is None:
             return
-        timestamp = datetime.utcnow().isoformat() + 'Z'
+        ts = datetime.utcnow().isoformat() + 'Z'
         self._gps_writer.writerow([
-            timestamp,
-            'FIX' if fix_status else 'NO_FIX',
+            ts,
+            'FIX' if has_fix else 'NO_FIX',
             f'{lat:.8f}',
             f'{lon:.8f}',
             f'{alt:.2f}',
             f'{speed:.3f}',
-            raw_sentence or '',
+            raw,
         ])
         self._gps_log_file.flush()
 
     def _close_logs(self):
-        if self._gps_log_file is not None:
-            self._gps_log_file.close()
-        if self._raw_nmea_log_file is not None:
-            self._raw_nmea_log_file.close()
+        for f in (self._gps_log_file, self._raw_nmea_log_file):
+            if f is not None:
+                f.close()
+
+    # ------------------------------------------------------------------
+    # Hardware read
+    # ------------------------------------------------------------------
 
     def _read_hardware(self):
         """
-        Read the next NMEA sentence from the GPS serial port and parse it.
-        Must return (lat_deg, lon_deg, alt_m, speed_mps, has_fix).
+        Drain all buffered NMEA sentences from the serial port and return
+        the most recent valid fix found in this cycle.
+        Returns (lat_deg, lon_deg, alt_m, speed_mps, has_fix).
         """
         if self._serial is None:
             return 0.0, 0.0, 0.0, 0.0, False
 
+        best = (0.0, 0.0, 0.0, 0.0, False)
+
         try:
-            line = self._serial.readline().decode('ascii', errors='ignore').strip()
+            # Read every sentence currently buffered — GPS emits ~13 lines/sec
+            # but the timer only fires at 1 Hz, so we drain the whole burst
+            # and keep the most recent valid fix rather than a single line.
+            while self._serial.in_waiting > 0:
+                raw = self._serial.readline()
+                line = raw.decode('ascii', errors='ignore').strip()
+                if not line:
+                    continue
+                self._last_sentence = line
+                self._log_raw_nmea(line)
+                result = parse_nmea_sentence(line)
+                if result[4]:    # has_fix — prefer the newest valid sentence
+                    best = result
         except serial.SerialException as exc:
-            self.get_logger().warning(f'Serial read failed: {exc}')
+            self.get_logger().warn(f'Serial read error: {exc}')
             return 0.0, 0.0, 0.0, 0.0, False
 
-        if not line:
-            return 0.0, 0.0, 0.0, 0.0, False
+        return best
 
-        self._last_sentence = line
-        self._log_raw_nmea(line)
-        return parse_nmea_sentence(line)
+    # ------------------------------------------------------------------
+    # Timer callback
+    # ------------------------------------------------------------------
 
     def _on_timer(self):
         lat, lon, alt, speed_mps, has_fix = self._read_hardware()
 
-        msg = NavSatFix()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = 'gps_link'
-        msg.status.status = (
+        fix_msg = NavSatFix()
+        fix_msg.header.stamp = self.get_clock().now().to_msg()
+        fix_msg.header.frame_id = 'gps_link'
+        fix_msg.status.status = (
             NavSatStatus.STATUS_FIX if has_fix else NavSatStatus.STATUS_NO_FIX
         )
-        msg.status.service = NavSatStatus.SERVICE_GPS
-        msg.latitude = lat
-        msg.longitude = lon
-        msg.altitude = alt
+        fix_msg.status.service = NavSatStatus.SERVICE_GPS
+        fix_msg.latitude = lat
+        fix_msg.longitude = lon
+        fix_msg.altitude = alt
+        # Covariance left as zeros — L76K does not report position uncertainty
+        fix_msg.position_covariance_type = NavSatFix.COVARIANCE_TYPE_UNKNOWN
 
-        self.fix_pub.publish(msg)
-        self.speed_pub.publish(Float32(data=speed_mps))
-        self._log_fix_data(has_fix, lat, lon, alt, speed_mps, self._last_sentence)
+        self._fix_pub.publish(fix_msg)
+        self._speed_pub.publish(Float32(data=speed_mps))
+        self._log_fix(has_fix, lat, lon, alt, speed_mps, self._last_sentence)
 
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 def main(args=None):
     rclpy.init(args=args)
