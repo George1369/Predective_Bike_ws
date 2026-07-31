@@ -43,27 +43,10 @@ if ! "${VENV_PYTHON}" -c "import serial" >/dev/null 2>&1; then
     "${VENV_PYTHON}" -m pip install -r requirements.txt
 fi
 
-ROS_SETUP=""
-for candidate in \
-    /opt/ros/lyrical/setup.bash \
-    /opt/ros/humble/setup.bash \
-    /opt/ros/iron/setup.bash \
-    /opt/ros/jazzy/setup.bash \
-    /opt/ros/rolling/setup.bash
-do
-    if [ -f "${candidate}" ]; then
-        ROS_SETUP="${candidate}"
-        break
-    fi
-done
-
-if [ -z "${ROS_SETUP}" ]; then
-    echo "ERROR: no ROS 2 setup.bash found under /opt/ros"
+if ! command -v ros2 >/dev/null 2>&1; then
+    echo "ERROR: ros2 is not on PATH. Source your ROS 2 environment first."
     exit 1
 fi
-
-# shellcheck disable=SC1091
-source "${ROS_SETUP}"
 
 if [ -f install/setup.bash ]; then
     # shellcheck disable=SC1091
