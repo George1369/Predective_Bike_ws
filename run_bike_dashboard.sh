@@ -51,7 +51,7 @@ else
 fi
 
 ROS_SETUP=""
-for candidate in /opt/ros/humble/setup.bash /opt/ros/iron/setup.bash /opt/ros/foxy/setup.bash /opt/ros/jazzy/setup.bash /opt/ros/rolling/setup.bash; do
+for candidate in /opt/ros/lyrical/setup.bash /opt/ros/humble/setup.bash /opt/ros/iron/setup.bash /opt/ros/foxy/setup.bash /opt/ros/jazzy/setup.bash /opt/ros/rolling/setup.bash; do
     if [ -f "${candidate}" ]; then
         ROS_SETUP="${candidate}"
         break
