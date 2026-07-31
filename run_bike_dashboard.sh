@@ -5,40 +5,47 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
 mkdir -p startup_logs
-LOG_FILE="${SCRIPT_DIR}/startup_logs/$(date '+%Y%m%d_%H%M%S')_bike_dashboard.log"
+LOG_FILE="${SCRIPT_DIR}/startup_logs/$(date +%Y%m%d_%H%M%S)_bike_dashboard.log"
 
 echo "Starting Bike ADAS dashboard"
 echo "Logging output to ${LOG_FILE}"
 exec > >(tee -a "${LOG_FILE}") 2>&1
 
-echo "--- $(date '+%Y-%m-%d %H:%M:%S') ---"
+echo "--- $(date +%Y-%m-%d_%H:%M:%S) ---"
 
 VENV_DIR="${SCRIPT_DIR}/.venv"
 VENV_PYTHON="${VENV_DIR}/bin/python"
+USE_VENV=1
+PIP_SCOPE=""
 
 if [ ! -d "${VENV_DIR}" ]; then
     echo "Virtual environment not found; creating .venv"
     if ! python3 -m venv "${VENV_DIR}"; then
-        echo "ERROR: Unable to create virtual environment. Install python3-venv and rerun."
-        exit 1
+        echo "WARNING: Unable to create virtual environment. Falling back to system Python."
+        USE_VENV=0
     fi
 fi
 
-if [ -f "${VENV_DIR}/bin/activate" ]; then
+if [ "${USE_VENV}" -eq 1 ] && [ -f "${VENV_DIR}/bin/activate" ]; then
     # shellcheck disable=SC1091
     source "${VENV_DIR}/bin/activate"
 else
-    echo "ERROR: Virtual environment activation script missing."
-    exit 1
+    VENV_PYTHON="$(command -v python3)"
+    PIP_SCOPE="--user"
 fi
 
 echo "Using Python: $(command -v python3)"
 echo "Checking Python dependencies..."
-"${VENV_PYTHON}" -m pip install --upgrade pip setuptools wheel
+if ! "${VENV_PYTHON}" -m pip --version >/dev/null 2>&1; then
+    echo "ERROR: pip is not available for ${VENV_PYTHON}."
+    exit 1
+fi
 
-if ! "${VENV_PYTHON}" -c 'import serial' >/dev/null 2>&1; then
+"${VENV_PYTHON}" -m pip install ${PIP_SCOPE} --upgrade pip setuptools wheel
+
+if ! "${VENV_PYTHON}" -c "import serial" >/dev/null 2>&1; then
     echo "Python dependencies missing; installing from requirements.txt"
-    "${VENV_PYTHON}" -m pip install -r requirements.txt
+    "${VENV_PYTHON}" -m pip install ${PIP_SCOPE} -r requirements.txt
 else
     echo "Required Python dependencies already installed."
 fi
@@ -63,7 +70,7 @@ if [ -f install/setup.bash ]; then
     # shellcheck disable=SC1091
     source install/setup.bash
 else
-    echo "Workspace install/setup.bash not found. Run 'colcon build' first."
+    echo "Workspace install/setup.bash not found. Run colcon build first."
     exit 1
 fi
 
