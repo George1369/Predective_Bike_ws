@@ -13,7 +13,7 @@ install the operating-system packages:
 
 ```bash
 sudo raspi-config nonint do_i2c 0
-sudo raspi-config nonint do_serial 2
+sudo raspi-config nonint do_serial 0
 sudo apt update
 sudo apt install -y python3-smbus2 python3-gpiozero python3-lgpio i2c-tools
 sudo usermod -aG i2c,dialout "$USER"
